@@ -12,12 +12,21 @@ export interface DependencyDefinition {
   purpose: string;
 }
 
-export interface InstallCommand {
+export interface ExecutableInstallCommand {
   dependency: DependencyId;
   command: string;
   args: string[];
   shell?: boolean;
 }
+
+export interface ManualInstallStep {
+  dependency: DependencyId;
+  manual: string;
+}
+
+export type InstallCommand = ExecutableInstallCommand | ManualInstallStep;
+
+export type WindowsManager = 'winget' | 'choco';
 
 export const dependencies: DependencyDefinition[] = [
   { id: 'uv', label: 'uv + managed Python', command: 'uv', required: true, purpose: 'Python runtime and packages' },
@@ -86,6 +95,46 @@ export function resolveDependencies(ids: string[], all: boolean): DependencyId[]
   return unique as DependencyId[];
 }
 
+export function buildWindowsInstallPlan(
+  ids: DependencyId[], managers: WindowsManager[],
+): InstallCommand[] {
+  const hasWinget = managers.includes('winget');
+  const hasChocolatey = managers.includes('choco');
+  const wingetIds: Record<DependencyId, string | null> = {
+    uv: 'astral-sh.uv', pandoc: 'JohnMacFarlane.Pandoc', calibre: 'calibre.calibre', epubcheck: null,
+  };
+  const chocolateyIds: Record<DependencyId, string> = {
+    uv: 'uv', pandoc: 'pandoc', calibre: 'calibre', epubcheck: 'epubcheck',
+  };
+  const manualInstructions: Record<DependencyId, string> = {
+    uv: 'Install uv manually from https://docs.astral.sh/uv/getting-started/installation/.',
+    pandoc: 'Install Pandoc manually from https://pandoc.org/installing.html.',
+    calibre: 'Install Calibre manually from https://calibre-ebook.com/download_windows.',
+    epubcheck: 'Install EPUBCheck manually from https://www.w3.org/developers/tools/epubcheck/.',
+  };
+  const plan: InstallCommand[] = [];
+  for (const id of ids) {
+    const wingetId = wingetIds[id];
+    if (hasWinget && wingetId) {
+      plan.push({
+        dependency: id,
+        command: 'winget',
+        args: ['install', '--exact', '--id', wingetId, '--accept-package-agreements', '--accept-source-agreements'],
+      });
+    } else if (hasChocolatey) {
+      plan.push({ dependency: id, command: 'choco', args: ['install', chocolateyIds[id], '-y'] });
+    } else if (dependencies.find((dependency) => dependency.id === id)?.required) {
+      throw new Error(`No supported Windows installer is available for required dependency: ${id}`);
+    } else {
+      plan.push({
+        dependency: id,
+        manual: manualInstructions[id],
+      });
+    }
+  }
+  return plan;
+}
+
 export function buildInstallPlan(
   selected: DependencyId[],
   platform: NodeJS.Platform = process.platform,
@@ -100,20 +149,8 @@ export function buildInstallPlan(
       : { dependency: id, command: 'brew', args: ['install', id] });
   }
   if (platform === 'win32') {
-    const manager = requireManager(['winget', 'choco'], 'Windows');
-    const wingetIds: Record<DependencyId, string | null> = {
-      uv: 'astral-sh.uv', pandoc: 'JohnMacFarlane.Pandoc', calibre: 'calibre.calibre', epubcheck: null,
-    };
-    return ids.map((id) => {
-      if (manager === 'winget' && wingetIds[id]) {
-        return { dependency: id, command: 'winget', args: ['install', '--exact', '--id', wingetIds[id]!, '--accept-package-agreements', '--accept-source-agreements'] };
-      }
-      if (manager === 'winget' && id === 'epubcheck') {
-        throw new Error('Automatic EPUBCheck installation on Windows requires Chocolatey (`choco install epubcheck`) or a manual install from w3c.github.io/epubcheck/.');
-      }
-      const chocolateyIds: Record<DependencyId, string> = { uv: 'uv', pandoc: 'pandoc', calibre: 'calibre', epubcheck: 'epubcheck' };
-      return { dependency: id, command: 'choco', args: ['install', chocolateyIds[id], '-y'] };
-    });
+    const managers = (['winget', 'choco'] as WindowsManager[]).filter(commandExists);
+    return buildWindowsInstallPlan(ids, managers);
   }
   if (platform === 'linux') {
     const manager = linuxManager ?? requireManager(['apt-get', 'dnf', 'pacman', 'zypper'], 'Linux');
@@ -140,17 +177,22 @@ export async function executeInstallPlan(
   options: { assumeYes: boolean },
 ): Promise<void> {
   if (!plan.length) return;
-  process.stdout.write('\nCommands to run:\n');
-  for (const step of plan) process.stdout.write(`  ${step.command} ${step.args.join(' ')}\n`);
+  process.stdout.write('\nInstallation plan:\n');
+  for (const step of plan) {
+    if ('manual' in step) process.stdout.write(`  ${step.dependency}: ${step.manual}\n`);
+    else process.stdout.write(`  ${step.command} ${step.args.join(' ')}\n`);
+  }
+  const commands = plan.filter((step): step is ExecutableInstallCommand => 'command' in step);
+  if (!commands.length) return;
   const approved = options.assumeYes || await confirm({
-    message: 'Run these system installation commands now?',
+    message: 'Run the automatic system installation commands now?',
     default: false,
   });
   if (!approved) {
     process.stdout.write('Dependency installation skipped.\n');
     return;
   }
-  for (const step of plan) {
+  for (const step of commands) {
     process.stdout.write(`\nInstalling ${step.dependency}...\n`);
     const result = spawnSync(step.command, step.args, { stdio: 'inherit', shell: step.shell ?? false });
     if (result.status !== 0) throw new Error(`Failed to install ${step.dependency} with ${step.command}.`);

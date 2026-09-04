@@ -50,7 +50,7 @@ For repeatable jobs, copy `configs/default.yaml`, edit it, then pass `--config F
 7. Check the generated HTML preview. Serve it when visual review is requested:
 
 ```bash
-any2book preview OUTPUT_DIRECTORY/preview
+any2book preview OUTPUT_DIRECTORY/BOOK_NAME.any2book/preview
 ```
 
 8. Return paths to the EPUB, HTML report, JSON report, and preview.
@@ -66,5 +66,7 @@ any2book preview OUTPUT_DIRECTORY/preview
 ## Dependency behavior
 
 Pandoc is required. Calibre is required only for MOBI and compatibility testing. EPUBCheck is strongly recommended; when absent, Any2Book performs internal package validation and emits `EPUBCHECK_UNAVAILABLE`.
+
+Internal EPUB inspection requires Expat 2.6.0 or newer and supports up to 64 MiB per parsed XML or CSS resource, 2 MiB per JavaScript resource, 20,000 unique references per resource, and 256 MiB total parsed content. XML is capped at 200,000 elements and 4,096 levels per resource, and CSS function nesting is capped at 4,096 levels. JavaScript parsing is interrupted after 2,500,000 parser operations per publication, and AST inspection is capped at 500,000 syntax-node and scope-resolution steps. Embedded data URLs are allowed without separate manifest entries; package links, top-level browsing links, statically identifiable `window.open`/`document.open` calls and aliases that use data URLs, and `iframe[srcdoc]` content that cannot be safely inspected are rejected. Binary media are not charged to the byte budget.
 
 Read `references/supported-formats.md` for format caveats and `references/conversion-policy.md` before handling risky or copyrighted inputs.

@@ -57,7 +57,7 @@ any2book convert document.pdf --ai claude --output dist/document.epub
 any2book convert document.pdf --ai codex --output dist/document.epub
 # Review more aggressively while retaining patch guardrails:
 any2book convert document.pdf --ai claude --ai-minimum-confidence 0.85 --output dist/document.epub
-any2book preview dist/preview
+any2book preview dist/document.any2book/preview
 ```
 
 Repeatable conversion:
@@ -69,7 +69,9 @@ any2book convert input.docx --config any2book.yaml
 
 Supported inputs are TXT, Markdown, local HTML, DOCX, text-based PDF, EPUB, and MOBI. Scanned PDF/OCR, web URLs, feeds, and media are planned adapters.
 
-Canonical conversions emit an EPUB, a semantic `reader-html/` workspace, `manifest.json`, an optional preview, and HTML/JSON reports. PDF reports include estimated text coverage, chapter count, image accounting, and removed layout artifacts.
+For safe EPUB validation, Any2Book requires Expat 2.6.0 or newer and parses at most 64 MiB per XML or CSS resource, 2 MiB per JavaScript resource, 20,000 unique references per resource, and 256 MiB across all parsed resources in one EPUB. XML is capped at 200,000 elements and 4,096 levels per resource, and CSS function nesting is capped at 4,096 levels. JavaScript parsing is interrupted after 2,500,000 parser operations per publication, and AST inspection is capped at 500,000 syntax-node and scope-resolution steps. Embedded data URLs are allowed without separate manifest entries, while EPUB-prohibited package links, top-level browsing links, statically identifiable `window.open`/`document.open` calls and aliases, and `iframe[srcdoc]` content that cannot be safely inspected are rejected. Large binary media remain subject only to the overall archive checks because validation does not load them into memory.
+
+Canonical conversions emit an EPUB plus a per-book `<output-stem>.any2book/` directory containing the semantic `reader-html/` workspace, `manifest.json`, an optional preview, and HTML/JSON reports. PDF reports include estimated text coverage, chapter count, image accounting, and removed layout artifacts.
 
 ## AI correction
 

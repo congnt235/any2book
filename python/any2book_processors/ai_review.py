@@ -4,15 +4,22 @@ import difflib
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from .path_safety import is_path_redirect, path_redirect_component
+
 Provider = Literal["claude", "codex"]
+
+_CHECKPOINT_MARKER = ".any2book-checkpoint"
+_CHECKPOINT_MARKER_VALUE = "any2book-ai-checkpoint-v1\n"
 
 
 def _schema(max_corrections: int) -> dict[str, object]:
@@ -294,9 +301,70 @@ def review_and_correct(
 
 
 def _atomic_json(path: Path, value: object) -> None:
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_checkpoint_marker(marker: Path) -> bool:
+    if is_path_redirect(marker):
+        raise RuntimeError(f"Invalid Any2Book checkpoint ownership marker: {marker}")
+    if not marker.exists():
+        return False
+    if not marker.is_file() or marker.read_text(encoding="utf-8") != _CHECKPOINT_MARKER_VALUE:
+        raise RuntimeError(f"Invalid Any2Book checkpoint ownership marker: {marker}")
+    return True
+
+
+def _create_checkpoint_marker(marker: Path) -> None:
+    try:
+        with marker.open("x", encoding="utf-8") as stream:
+            stream.write(_CHECKPOINT_MARKER_VALUE)
+    except FileExistsError as exc:
+        raise RuntimeError(f"Checkpoint ownership marker changed unexpectedly: {marker}") from exc
+
+
+def _prepare_checkpoint_dir(checkpoint_dir: Path, resume: bool) -> None:
+    marker = checkpoint_dir / _CHECKPOINT_MARKER
+    redirect = path_redirect_component(checkpoint_dir)
+    if redirect:
+        raise RuntimeError(f"AI checkpoint path redirects through: {redirect}")
+    if checkpoint_dir.exists() and not checkpoint_dir.is_dir():
+        raise RuntimeError(f"AI checkpoint path is not a directory: {checkpoint_dir}")
+    if resume and not checkpoint_dir.is_dir():
+        missing_state = checkpoint_dir / "state.json"
+        raise RuntimeError(f"Cannot resume: checkpoint state not found at {missing_state}")
+
+    owned = checkpoint_dir.is_dir() and _validate_checkpoint_marker(marker)
+
+    if not resume and checkpoint_dir.is_dir():
+        entries = list(checkpoint_dir.iterdir())
+        if entries and not owned:
+            raise RuntimeError(
+                f"Refusing to reset non-empty checkpoint directory not owned by Any2Book: "
+                f"{checkpoint_dir}"
+            )
+        state_path = checkpoint_dir / "state.json"
+        batches_dir = checkpoint_dir / "batches"
+        if state_path.exists():
+            state_path.unlink()
+        if batches_dir.exists():
+            if not batches_dir.is_dir() or is_path_redirect(batches_dir):
+                raise RuntimeError(f"Invalid checkpoint batches directory: {batches_dir}")
+            shutil.rmtree(batches_dir)
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    if not resume and not owned:
+        _create_checkpoint_marker(marker)
 
 
 def review_pages_in_batches(
@@ -311,6 +379,12 @@ def review_pages_in_batches(
     resume: bool,
 ) -> tuple[str, dict[str, object]]:
     """Review bounded page batches and atomically checkpoint every successful response."""
+    checkpoint_absolute = (
+        checkpoint_dir if checkpoint_dir.is_absolute() else Path.cwd() / checkpoint_dir
+    )
+    if is_path_redirect(checkpoint_absolute):
+        raise RuntimeError(f"AI checkpoint path redirects through: {checkpoint_absolute}")
+    checkpoint_dir = checkpoint_absolute.parent.resolve(strict=False) / checkpoint_absolute.name
     source_hash = hashlib.sha256("\f".join(pages).encode()).hexdigest()
     expected = {
         "version": 1,
@@ -322,14 +396,11 @@ def review_pages_in_batches(
         "maxCorrections": max_corrections,
     }
     state_path = checkpoint_dir / "state.json"
-    if checkpoint_dir.exists() and not resume:
-        shutil.rmtree(checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_checkpoint_dir(checkpoint_dir, resume)
     batches_dir = checkpoint_dir / "batches"
-    batches_dir.mkdir(exist_ok=True)
 
     if resume:
-        if not state_path.is_file():
+        if is_path_redirect(state_path) or not state_path.is_file():
             raise RuntimeError(f"Cannot resume: checkpoint state not found at {state_path}")
         state = json.loads(state_path.read_text(encoding="utf-8"))
         for key, value in expected.items():
@@ -337,6 +408,9 @@ def review_pages_in_batches(
                 raise RuntimeError(
                     f"Cannot resume: checkpoint {key} does not match this conversion"
                 )
+        marker = checkpoint_dir / _CHECKPOINT_MARKER
+        if not _validate_checkpoint_marker(marker):
+            _create_checkpoint_marker(marker)
     else:
         state = {
             **expected,
@@ -346,6 +420,9 @@ def review_pages_in_batches(
             "updatedAt": datetime.now(UTC).isoformat(),
         }
         _atomic_json(state_path, state)
+    if is_path_redirect(batches_dir) or (batches_dir.exists() and not batches_dir.is_dir()):
+        raise RuntimeError(f"Invalid checkpoint batches directory: {batches_dir}")
+    batches_dir.mkdir(exist_ok=True)
 
     corrected_batches: list[str] = []
     all_applied: list[dict[str, object]] = []
@@ -362,7 +439,11 @@ def review_pages_in_batches(
         batch_text = "\n\n".join(pages[start:end]).strip() + "\n"
         input_hash = hashlib.sha256(batch_text.encode()).hexdigest()
         batch_dir = batches_dir / f"{batch_index:04d}"
+        if is_path_redirect(batch_dir) or (batch_dir.exists() and not batch_dir.is_dir()):
+            raise RuntimeError(f"Invalid AI batch checkpoint directory: {batch_dir}")
         result_path = batch_dir / "result.json"
+        if is_path_redirect(result_path):
+            raise RuntimeError(f"Invalid AI batch checkpoint result: {result_path}")
         batch_result: dict[str, Any] | None = None
         if resume and result_path.is_file():
             candidate: dict[str, Any] = json.loads(result_path.read_text(encoding="utf-8"))

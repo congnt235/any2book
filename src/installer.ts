@@ -122,7 +122,7 @@ export async function installSkills(
     if (existsSync(destination) && !overwrite && !options.assumeYes && process.stdin.isTTY) {
       overwrite = await confirm({ message: `Overwrite ${destination}?`, default: false });
     }
-    if (existsSync(destination) && !overwrite && !options.assumeYes) {
+    if (existsSync(destination) && !overwrite) {
       results.push({ agent: agent.id, path: destination, status: 'skipped' });
       continue;
     }
