@@ -1,0 +1,29 @@
+version: 1
+book:
+  title: null
+  authors: []
+  language: vi
+  identifier: null
+  publisher: null
+  description: null
+  cover: null
+conversion:
+  mode: faithful
+  tableOfContents: auto
+  splitLevel: 1
+  preserveImages: true
+  preserveFootnotes: true
+  includeSourceMetadata: true
+output:
+  directory: ./dist
+  filename: null
+  preview: true
+  report: true
+ai:
+  provider: off
+  minimumConfidence: 0.9
+  maxCorrections: 80
+  timeoutSeconds: 600
+  batchPages: 10
+  jobDirectory: null
+  resume: false

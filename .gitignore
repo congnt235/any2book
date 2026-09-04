@@ -1,0 +1,46 @@
+# Node.js
+node_modules/
+dist/
+build/
+coverage/
+*.tgz
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Any2Book generated content
+.any2book/
+.any2book-job/
+local-output*/
+*.epub
+!fixtures/**/*.epub
+
+# Tests and temporary files
+test-results/
+playwright-report/
+*.tmp
+*.temp
+*.log
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,5 @@
+Knowledge as a Personal Book
+
+Any source becomes more useful when it can be read without distraction.
+
+This fixture checks that paragraphs remain in their original order.
