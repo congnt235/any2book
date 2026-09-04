@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,5 +21,20 @@ describe('skill installer', () => {
     expect(readFileSync(join(installed.path, 'SKILL.md'), 'utf8')).toContain('any2book convert');
     expect(uninstallSkills([agent])[0].status).toBe('removed');
     expect(existsSync(installed.path)).toBe(false);
+  });
+
+  it('does not treat --yes as permission to overwrite an existing skill', async () => {
+    home = mkdtempSync(join(tmpdir(), 'any2book-home-'));
+    process.env.ANY2BOOK_HOME = home;
+    const [agent] = resolveAgents(['claude'], false);
+    const destination = join(agent.skillRoot, 'any2book');
+    const sentinel = join(destination, 'sentinel.txt');
+    mkdirSync(destination, { recursive: true });
+    writeFileSync(sentinel, 'keep');
+
+    const [result] = await installSkills([agent], { force: false, assumeYes: true });
+
+    expect(result.status).toBe('skipped');
+    expect(readFileSync(sentinel, 'utf8')).toBe('keep');
   });
 });
