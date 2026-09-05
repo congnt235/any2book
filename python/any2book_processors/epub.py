@@ -33,6 +33,7 @@ table { border-collapse: collapse; max-width: 100%; }
 th, td { border: 1px solid #888; padding: .3em; }
 pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
 a { text-decoration: none; }
+.ornament { letter-spacing: .75em; margin: 1.5em 0; text-align: center; }
 """
 
 

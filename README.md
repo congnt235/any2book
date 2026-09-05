@@ -73,6 +73,12 @@ For safe EPUB validation, Any2Book requires Expat 2.6.0 or newer and parses at m
 
 Canonical conversions emit an EPUB plus a per-book `<output-stem>.any2book/` directory containing the semantic `reader-html/` workspace, `manifest.json`, an optional preview, and HTML/JSON reports. PDF reports include estimated text coverage, chapter count, image accounting, and removed layout artifacts.
 
+### PDF fidelity
+
+For legacy Vietnamese PDFs, Any2Book detects TCVN3/ABC text layers and converts them to NFC Unicode. It also recovers uppercase text encoded through legacy font variants. On text-dense pages, the PDF adapter selects semantic layout extraction only when text coverage is preserved and paragraph fragmentation is reduced; sparse front matter remains on the conservative legacy extractor.
+
+The PDF cleanup pass removes repeated running headers and Roman page numbers, rejoins paragraphs split across page boundaries, converts matching notes to navigable EPUB footnotes, and preserves decorative ornaments. These repairs are included in the quality report. Output remains reflowable EPUB3, so fixed page coordinates and pixel-perfect PDF reproduction are intentionally not preserved.
+
 ## AI correction
 
 The default path is deterministic and uses:
