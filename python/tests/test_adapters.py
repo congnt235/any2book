@@ -1,6 +1,8 @@
 import re
+import shutil
 from pathlib import Path
 
+import pytest
 from any2book_processors.adapters import (
     _normalize_tcvn3,
     _prefer_pdf_prose_layout,
@@ -10,6 +12,7 @@ from any2book_processors.adapters import (
     detect_format,
     extract_document,
 )
+from any2book_processors.epub import internal_validate, render
 
 
 def test_detect_and_extract_text(tmp_path: Path) -> None:
@@ -22,6 +25,24 @@ def test_detect_and_extract_text(tmp_path: Path) -> None:
     assert document.schema_version == "2"
     assert len(document.chapters) == 1
     assert "First paragraph" in document.chapters[0].html
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="Pandoc is not installed")
+def test_markdown_code_block_renders_with_unique_epub_identifiers(tmp_path: Path) -> None:
+    source = tmp_path / "sample.md"
+    source.write_text("# Chapter\n\n```ts\nconst book = 'EPUB3';\n```\n", encoding="utf-8")
+    metadata = {"title": "Code sample", "language": "en", "authors": []}
+    document = extract_document(source, "markdown", tmp_path, metadata)
+    output = tmp_path / "sample.epub"
+
+    render(
+        document,
+        output,
+        tmp_path,
+        {"conversion": {"splitLevel": 1, "tableOfContents": "auto"}},
+    )
+
+    internal_validate(output)
 
 
 def test_normalize_tcvn3_text_layer() -> None:

@@ -238,6 +238,7 @@ def _pandoc_document(
             f"--from={from_format}",
             "--to=html5",
             "--standalone",
+            "--no-highlight",
             f"--extract-media={assets}",
             f"--resource-path={path.parent}",
             "--output",
