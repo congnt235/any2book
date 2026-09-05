@@ -1,6 +1,6 @@
 {
   "name": "any2book",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Convert personal knowledge files to faithful EPUB3 books, with installable Agent Skills support.",
   "type": "module",
   "license": "MIT",
@@ -30,6 +30,7 @@
     "references",
     "SKILL.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
     "uv.lock"

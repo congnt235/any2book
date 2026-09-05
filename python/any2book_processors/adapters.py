@@ -4,7 +4,9 @@ import html
 import re
 import shutil
 import subprocess
+import unicodedata
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,6 +18,110 @@ from .models import BookDocument, Chapter, ConversionWarning
 from .security import sanitize_html
 
 SUPPORTED = {"txt", "markdown", "html", "docx", "pdf", "epub", "mobi"}
+# PDF text extractors expose TCVN 5712-1 (TCVN3/ABC) bytes as Latin-1 code points.
+_TCVN3_TARGETS = (
+    "Ă",
+    "Â",
+    "Ê",
+    "Ô",
+    "Ơ",
+    "Ư",
+    "Đ",
+    "ă",
+    "â",
+    "ê",
+    "ô",
+    "ơ",
+    "ư",
+    "đ",
+    "Ằ",
+    "\N{COMBINING GRAVE ACCENT}",
+    "\N{COMBINING HOOK ABOVE}",
+    "\N{COMBINING TILDE}",
+    "\N{COMBINING ACUTE ACCENT}",
+    "\N{COMBINING DOT BELOW}",
+    "à",
+    "ả",
+    "ã",
+    "á",
+    "ạ",
+    "Ẳ",
+    "ằ",
+    "ẳ",
+    "ẵ",
+    "ắ",
+    "Ẵ",
+    "Ắ",
+    "Ầ",
+    "Ẩ",
+    "Ẫ",
+    "Ấ",
+    "Ề",
+    "ặ",
+    "ầ",
+    "ẩ",
+    "ẫ",
+    "ấ",
+    "ậ",
+    "è",
+    "Ể",
+    "ẻ",
+    "ẽ",
+    "é",
+    "ẹ",
+    "ề",
+    "ể",
+    "ễ",
+    "ế",
+    "ệ",
+    "ì",
+    "ỉ",
+    "Ễ",
+    "Ế",
+    "Ồ",
+    "ĩ",
+    "í",
+    "ị",
+    "ò",
+    "Ổ",
+    "ỏ",
+    "õ",
+    "ó",
+    "ọ",
+    "ồ",
+    "ổ",
+    "ỗ",
+    "ố",
+    "ộ",
+    "ờ",
+    "ở",
+    "ỡ",
+    "ớ",
+    "ợ",
+    "ù",
+    "Ỗ",
+    "ủ",
+    "ũ",
+    "ú",
+    "ụ",
+    "ừ",
+    "ử",
+    "ữ",
+    "ứ",
+    "ự",
+    "ỳ",
+    "ỷ",
+    "ỹ",
+    "ý",
+    "ỵ",
+    "Ố",
+)
+_TCVN3_TRANSLATION = {
+    **dict(zip(range(0xA1, 0x100), _TCVN3_TARGETS, strict=True)),
+    ord("−"): "ư",
+}
+_TCVN3_STRONG_MARKERS = frozenset("¤¥¦§¨©¬®µ¶¸¹¾×−")
+_TCVN3_WORD = re.compile(r"[A-Za-z\u00a1-\u00ff−]+")
 EXTENSIONS = {
     ".txt": "txt",
     ".md": "markdown",
@@ -166,6 +272,64 @@ def _text_document(path: Path, metadata: dict[str, Any]) -> BookDocument:
     )
 
 
+def _normalize_tcvn3(value: str) -> tuple[str, int]:
+    marker_counts = {marker: value.count(marker) for marker in _TCVN3_STRONG_MARKERS}
+    present_markers = sum(count > 0 for count in marker_counts.values())
+    marker_total = sum(marker_counts.values())
+    density = marker_total / max(1, len(value))
+    if marker_total < 4 or present_markers < 3 or density < 0.002:
+        return value, 0
+
+    def translate_line(line: str) -> str:
+        visible = re.sub(r"<[^>]+>", "", line)
+        line_ascii = [
+            character for character in visible if character.isascii() and character.isalpha()
+        ]
+        uppercase_line = len(line_ascii) >= 4 and all(
+            character.isupper() for character in line_ascii
+        )
+
+        def translate_word(match: re.Match[str]) -> str:
+            original = match.group(0)
+            translated = original.translate(_TCVN3_TRANSLATION)
+            word_ascii = [
+                character for character in original if character.isascii() and character.isalpha()
+            ]
+            uppercase_word = len(word_ascii) >= 2 and all(
+                character.isupper() for character in word_ascii
+            )
+            return translated.upper() if uppercase_line or uppercase_word else translated
+
+        return _TCVN3_WORD.sub(translate_word, line)
+
+    translated = "".join(translate_line(line) for line in value.splitlines(keepends=True))
+    normalized = unicodedata.normalize("NFC", translated)
+    changed = sum(ord(character) in _TCVN3_TRANSLATION for character in value)
+    return normalized, changed
+
+
+def _restore_pdf_font_case(value: str, text_dictionary: dict[str, Any]) -> tuple[str, int]:
+    replacements: set[tuple[str, str]] = set()
+    for block in text_dictionary.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                font = str(span.get("font", ""))
+                raw_text = str(span.get("text", ""))
+                if not re.search(r"H(?:,|$)", font) or not raw_text.strip():
+                    continue
+                decoded = unicodedata.normalize("NFC", raw_text.translate(_TCVN3_TRANSLATION))
+                source = decoded.strip()
+                replacement = source.upper()
+                if source and source != replacement:
+                    replacements.add((source, replacement))
+
+    changed = 0
+    for source, replacement in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        value, count = re.subn(re.escape(source), replacement, value, flags=re.IGNORECASE)
+        changed += count
+    return value, changed
+
+
 def _clean_pdf_markdown(value: str) -> tuple[str, dict[str, int]]:
     lines = value.replace("\r\n", "\n").splitlines()
     standalone_numbers = sum(bool(re.fullmatch(r"\s*\d{1,4}\s*", line)) for line in lines)
@@ -201,6 +365,171 @@ def _clean_pdf_markdown(value: str) -> tuple[str, dict[str, int]]:
     }
 
 
+def _prefer_pdf_prose_layout(legacy: str, candidate: str) -> bool:
+    legacy_text = legacy.strip()
+    candidate_text = candidate.strip()
+    if len(candidate_text) < 800:
+        return False
+
+    legacy_blocks = len(re.split(r"\n\s*\n", legacy_text)) if legacy_text else 0
+    candidate_blocks = len(re.split(r"\n\s*\n", candidate_text))
+    legacy_words = _word_count(legacy_text)
+    candidate_words = _word_count(candidate_text)
+    comparable_coverage = candidate_words >= legacy_words * 0.9
+    materially_less_fragmented = candidate_blocks * 4 <= max(1, legacy_blocks * 3)
+    return comparable_coverage and materially_less_fragmented
+
+
+def _pdf_running_header_key(block: str) -> str:
+    value = re.sub(r"<[^>]+>", "", block)
+    value = re.sub(r"^[#*_\s]+|[#*_\s]+$", "", value)
+    return re.sub(r"\s+", " ", value).strip().casefold()
+
+
+def _remove_pdf_page_artifacts(pages: list[str]) -> tuple[list[str], dict[str, int]]:
+    page_blocks = [
+        [block.strip() for block in re.split(r"\n\s*\n", page.strip()) if block.strip()]
+        for page in pages
+    ]
+    top_entries = [
+        (page_index, block_index, block, _pdf_running_header_key(block))
+        for page_index, blocks in enumerate(page_blocks)
+        for block_index, block in enumerate(blocks[:2])
+    ]
+    key_counts = Counter(
+        key for _, _, _, key in top_entries if key and len(key) <= 120 and len(key.split()) <= 12
+    )
+    repeated_headers = {key for key, count in key_counts.items() if count >= 3}
+    first_header_page: dict[str, int] = {}
+    for page_index, _, _, key in top_entries:
+        first_header_page.setdefault(key, page_index)
+
+    roman_candidates = sum(
+        bool(re.fullmatch(r"[ivxlcdm]{1,8}", key, re.IGNORECASE))
+        for _, _, _, key in top_entries
+    )
+    remove_roman_numbers = roman_candidates >= 3
+    removed_headers = 0
+    removed_roman_numbers = 0
+    cleaned_pages: list[str] = []
+    for page_index, blocks in enumerate(page_blocks):
+        cleaned: list[str] = []
+        for block_index, block in enumerate(blocks):
+            key = _pdf_running_header_key(block)
+            is_top_block = block_index < 2
+            is_roman_number = bool(re.fullmatch(r"[ivxlcdm]{1,8}", key, re.IGNORECASE))
+            if is_top_block and remove_roman_numbers and is_roman_number:
+                removed_roman_numbers += 1
+                continue
+            if is_top_block and key in repeated_headers:
+                preserve_first_heading = (
+                    page_index == first_header_page[key] and block.lstrip().startswith("#")
+                )
+                if not preserve_first_heading:
+                    removed_headers += 1
+                    continue
+            cleaned.append(block)
+        cleaned_pages.append("\n\n".join(cleaned).strip() + "\n" if cleaned else "")
+    return cleaned_pages, {
+        "removedRunningHeaders": removed_headers,
+        "removedRomanPageNumbers": removed_roman_numbers,
+    }
+
+
+def _pdf_visible_text(value: str) -> str:
+    value = re.sub(r"<[^>]+>", "", value)
+    return re.sub(r"[*_`#\[\]()]", "", value).strip()
+
+
+def _repair_pdf_page_flow(pages: list[str]) -> tuple[list[str], dict[str, int]]:
+    page_blocks = [
+        [block.strip() for block in re.split(r"\n\s*\n", page.strip()) if block.strip()]
+        for page in pages
+    ]
+    converted_footnotes = 0
+    collapsed_ornaments = 0
+    for blocks in page_blocks:
+        markers = set(re.findall(r"<sup>(\d{1,3})</sup>", "\n".join(blocks)))
+        for marker in markers:
+            footnote = re.compile(rf"^{re.escape(marker)}\.\s+(.+)$", re.DOTALL)
+            match_index = next(
+                (index for index, block in enumerate(blocks) if footnote.fullmatch(block)), None
+            )
+            if match_index is None:
+                continue
+            blocks[:] = [
+                block.replace(f"<sup>{marker}</sup>", f"[^{marker}]") for block in blocks
+            ]
+            match = footnote.fullmatch(blocks[match_index])
+            if match:
+                blocks[match_index] = f"[^{marker}]: {match.group(1).strip()}"
+                converted_footnotes += 1
+
+        repaired: list[str] = []
+        ornament_stars = 0
+        for block in blocks:
+            if re.fullmatch(r"(?:\*\s*){1,3}", block):
+                ornament_stars += block.count("*")
+                continue
+            if ornament_stars:
+                repaired.append('<div class="ornament">* * *</div>')
+                collapsed_ornaments += 1
+                ornament_stars = 0
+            repaired.append(block)
+        if ornament_stars:
+            repaired.append('<div class="ornament">* * *</div>')
+            collapsed_ornaments += 1
+        blocks[:] = repaired
+
+    joined_paragraphs = 0
+    for index in range(len(page_blocks) - 1):
+        current = page_blocks[index]
+        following = page_blocks[index + 1]
+        current_index = next(
+            (
+                block_index
+                for block_index in range(len(current) - 1, -1, -1)
+                if not current[block_index].startswith("[^")
+                and "class=\"ornament\"" not in current[block_index]
+            ),
+            None,
+        )
+        following_index = next(
+            (
+                block_index
+                for block_index, block in enumerate(following)
+                if not block.startswith("[^") and "class=\"ornament\"" not in block
+            ),
+            None,
+        )
+        if current_index is None or following_index is None:
+            continue
+        current_text = _pdf_visible_text(current[current_index])
+        following_text = _pdf_visible_text(following[following_index])
+        following_letter = next(
+            (character for character in following_text if character.isalpha()), ""
+        )
+        sentence_end = current_text.rstrip('”’"\')]}').endswith((".", "?", "!", "…"))
+        if (
+            len(current_text) >= 120
+            and len(following_text) >= 40
+            and following_letter.islower()
+            and not sentence_end
+        ):
+            current[current_index] = (
+                current[current_index].rstrip() + " " + following[following_index].lstrip()
+            )
+            del following[following_index]
+            joined_paragraphs += 1
+
+    cleaned_pages = ["\n\n".join(blocks).strip() + "\n" if blocks else "" for blocks in page_blocks]
+    return cleaned_pages, {
+        "convertedFootnotes": converted_footnotes,
+        "collapsedOrnaments": collapsed_ornaments,
+        "joinedPageParagraphs": joined_paragraphs,
+    }
+
+
 def _word_count(value: str) -> int:
     without_images = re.sub(r"!\[[^]]*]\([^)]*\)", "", value)
     without_markup = re.sub(r"[<>*_#`\[\]()]", " ", without_images)
@@ -220,19 +549,19 @@ def _pdf_document(
     if len(source_text.strip()) < 40:
         raise RuntimeError("Scanned PDF detected. OCR is not included in the MVP.")
 
+    normalized_source_text, source_tcvn3_characters = _normalize_tcvn3(source_text)
     image_occurrences: list[int] = []
+    page_image_counts: list[int] = []
     for page_index in range(document.page_count):
-        image_occurrences.extend(
-            image[0] for image in document.load_page(page_index).get_images(full=True)
-        )
+        page_images = [image[0] for image in document.load_page(page_index).get_images(full=True)]
+        page_image_counts.append(len(page_images))
+        image_occurrences.extend(page_images)
     unique_images = len(set(image_occurrences))
     assets = work_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
 
-    # Legacy mode currently handles line-numbered technical documents more faithfully than
-    # the optional neural layout engine, which can misclassify margin numbers as list items.
     pymupdf4llm.use_layout(False)
-    chunks = pymupdf4llm.to_markdown(
+    legacy_chunks = pymupdf4llm.to_markdown(
         str(path),
         page_chunks=True,
         write_images=True,
@@ -240,14 +569,55 @@ def _pdf_document(
         table_strategy="lines_strict",
         show_progress=False,
     )
-    if not isinstance(chunks, list):
+    if not isinstance(legacy_chunks, list):
         raise RuntimeError("PyMuPDF4LLM did not return page chunks")
+    chunks = list(legacy_chunks)
+    selected_engines = ["pymupdf4llm-legacy"] * len(chunks)
+    layout_pages = 0
+    if source_tcvn3_characters:
+        pymupdf4llm.use_layout(True)
+        layout_chunks = pymupdf4llm.to_markdown(
+            str(path),
+            page_chunks=True,
+            write_images=False,
+            table_strategy="lines_strict",
+            show_progress=False,
+        )
+        if not isinstance(layout_chunks, list) or len(layout_chunks) != len(legacy_chunks):
+            raise RuntimeError("PyMuPDF4LLM layout extraction did not preserve page boundaries")
+        for index, (legacy_chunk, layout_chunk) in enumerate(
+            zip(legacy_chunks, layout_chunks, strict=True)
+        ):
+            legacy_text = str(legacy_chunk.get("text", ""))
+            layout_text = str(layout_chunk.get("text", ""))
+            if page_image_counts[index] == 0 and _prefer_pdf_prose_layout(
+                legacy_text, layout_text
+            ):
+                chunks[index] = layout_chunk
+                selected_engines[index] = "pymupdf4llm-layout"
+                layout_pages += 1
     generated_images = [item for item in assets.rglob("*") if item.is_file()]
     raw_pages = [
         str(chunk.get("text", "")).replace(str(assets), "assets") for chunk in chunks
     ]
     separator = "\n\n<!-- A2B_PAGE_BREAK -->\n\n"
-    cleaned_with_markers, cleanup = _clean_pdf_markdown(separator.join(raw_pages))
+    normalized_with_markers, normalized_characters = _normalize_tcvn3(separator.join(raw_pages))
+    normalized_pages = normalized_with_markers.split("<!-- A2B_PAGE_BREAK -->")
+    font_case_corrections = 0
+    for index, page in enumerate(normalized_pages):
+        if selected_engines[index] != "pymupdf4llm-legacy":
+            continue
+        normalized_pages[index], corrections = _restore_pdf_font_case(
+            page, document.load_page(index).get_text("dict")
+        )
+        font_case_corrections += corrections
+    normalized_pages, page_cleanup = _remove_pdf_page_artifacts(normalized_pages)
+    normalized_pages, flow_cleanup = _repair_pdf_page_flow(normalized_pages)
+    cleaned_with_markers, cleanup = _clean_pdf_markdown(separator.join(normalized_pages))
+    cleanup.update(page_cleanup)
+    cleanup.update(flow_cleanup)
+    cleanup["normalizedTcvn3Characters"] = normalized_characters
+    cleanup["fontCaseCorrections"] = font_case_corrections
     cleaned_pages = [
         part.strip() + "\n" for part in cleaned_with_markers.split("<!-- A2B_PAGE_BREAK -->")
     ]
@@ -276,7 +646,7 @@ def _pdf_document(
 
     result = _pandoc_document(markdown_path, "markdown", work_dir, metadata)
     extracted_images = len(generated_images)
-    source_words = _word_count(source_text)
+    source_words = _word_count(normalized_source_text)
     extracted_words = _word_count(cleaned_markdown)
     raw_coverage = min(1.0, extracted_words / source_words) if source_words else 0.0
     meaningful_source_words = max(
@@ -289,7 +659,7 @@ def _pdf_document(
         {
             "sourcePage": int(chunk.get("metadata", {}).get("page_number", index + 1)),
             "textCharacters": len(str(chunk.get("text", ""))),
-            "engine": "pymupdf4llm-legacy",
+            "engine": selected_engines[index],
         }
         for index, chunk in enumerate(chunks)
     ]
@@ -318,6 +688,7 @@ def _pdf_document(
         "aiEstimatedCostUsd": ai_audit.get("estimatedCostUsd") if ai_audit else None,
         "aiDurationMs": ai_audit.get("durationMs") if ai_audit else None,
         "aiCheckpointDirectory": ai_audit.get("checkpointDirectory") if ai_audit else None,
+        "layoutPages": layout_pages,
         **cleanup,
     }
     if ai_audit:
@@ -325,6 +696,22 @@ def _pdf_document(
             ConversionWarning(
                 "AI_CORRECTIONS_APPLIED",
                 f"Applied {len(ai_applied)} conservative corrections from {provider} CLI.",
+                "info",
+            )
+        )
+    if normalized_characters:
+        result.warnings.append(
+            ConversionWarning(
+                "PDF_TCVN3_NORMALIZED",
+                f"Normalized {normalized_characters} legacy TCVN3 characters to Unicode.",
+                "info",
+            )
+        )
+    if layout_pages:
+        result.warnings.append(
+            ConversionWarning(
+                "PDF_PROSE_LAYOUT",
+                f"Used semantic prose layout on {layout_pages} text-dense pages.",
                 "info",
             )
         )
