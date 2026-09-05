@@ -1,6 +1,6 @@
 {
   "name": "any2book",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Convert personal knowledge files to faithful EPUB3 books, with installable Agent Skills support.",
   "type": "module",
   "license": "MIT",

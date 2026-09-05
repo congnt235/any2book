@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-05
+
+### Fixed
+
+- Read the CLI and backend version from package metadata so reported conversion provenance stays
+  synchronized with the published release.
+
 ## [0.2.1] - 2026-09-05
 
 ### Fixed
@@ -46,7 +53,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behavior.
 - Correct the npm executable path for global installations.
 
-[Unreleased]: https://github.com/congnt235/any2book/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/congnt235/any2book/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/congnt235/any2book/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/congnt235/any2book/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/congnt235/any2book/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/congnt235/any2book/releases/tag/v0.1.1
