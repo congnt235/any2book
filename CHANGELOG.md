@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-05
+
+### Added
+
+- Recognize headed name/role lists from PDF baselines and section-local column alignment,
+  retaining empty role cells and legacy Vietnamese font case in borderless EPUB tables.
+- Report recognized roster pages, groups, and rows; retain the existing extraction path
+  for ambiguous layouts, prose columns, rotated text, and pages containing images.
+
+### Fixed
+
+- Exclude HTML tags from word-count coverage and prevent roster tables from being joined
+  to prose on the following page.
+
 ## [0.2.2] - 2026-09-05
 
 ### Fixed
@@ -53,7 +67,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behavior.
 - Correct the npm executable path for global installations.
 
-[Unreleased]: https://github.com/congnt235/any2book/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/congnt235/any2book/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/congnt235/any2book/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/congnt235/any2book/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/congnt235/any2book/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/congnt235/any2book/compare/v0.1.1...v0.2.0
