@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
@@ -31,8 +31,13 @@ import { servePreview } from './preview.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaults = resolve(root, 'configs/default.yaml');
+const packageMetadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
+  version: string;
+};
 const program = new Command();
-program.name('any2book').description('Convert personal knowledge sources to faithful EPUB3 books').version('0.2.0');
+program.name('any2book')
+  .description('Convert personal knowledge sources to faithful EPUB3 books')
+  .version(packageMetadata.version);
 
 const collectValue = (value: string, values: string[]): string[] => [...values, value];
 const printInstallResults = (results: Array<{ agent: string; path: string; status: string }>): void => {
