@@ -15,6 +15,7 @@ import pymupdf4llm  # type: ignore[import-untyped]
 
 from .ai_review import Provider, review_pages_in_batches
 from .models import BookDocument, Chapter, ConversionWarning
+from .pdf_layout import aligned_roster
 from .security import sanitize_html
 
 SUPPORTED = {"txt", "markdown", "html", "docx", "pdf", "epub", "mobi"}
@@ -505,6 +506,8 @@ def _repair_pdf_page_flow(pages: list[str]) -> tuple[list[str], dict[str, int]]:
         )
         if current_index is None or following_index is None:
             continue
+        if "<table" in current[current_index] or "<table" in following[following_index]:
+            continue
         current_text = _pdf_visible_text(current[current_index])
         following_text = _pdf_visible_text(following[following_index])
         following_letter = next(
@@ -533,6 +536,7 @@ def _repair_pdf_page_flow(pages: list[str]) -> tuple[list[str], dict[str, int]]:
 
 def _word_count(value: str) -> int:
     without_images = re.sub(r"!\[[^]]*]\([^)]*\)", "", value)
+    without_images = re.sub(r"<[^>]+>", " ", without_images)
     without_markup = re.sub(r"[<>*_#`\[\]()]", " ", without_images)
     return len(re.findall(r"\b\w+\b", without_markup, re.UNICODE))
 
@@ -613,6 +617,29 @@ def _pdf_document(
         )
         font_case_corrections += corrections
     normalized_pages, page_cleanup = _remove_pdf_page_artifacts(normalized_pages)
+    roster_pages = 0
+    roster_groups = 0
+    roster_rows = 0
+    for index in range(len(normalized_pages)):
+        if page_image_counts[index]:
+            continue
+
+        def decode_span(span: dict[str, Any]) -> str:
+            text = str(span["text"])
+            font = str(span.get("font", ""))
+            if font.startswith(".Vn"):
+                text = unicodedata.normalize("NFC", text.translate(_TCVN3_TRANSLATION))
+                if re.search(r"H(?:,|$)", font):
+                    text = text.upper()
+            return text
+
+        roster = aligned_roster(document.load_page(index).get_text("dict"), decode_span)
+        if roster is not None:
+            normalized_pages[index], groups, rows = roster
+            selected_engines[index] = "pdf-aligned-roster"
+            roster_pages += 1
+            roster_groups += groups
+            roster_rows += rows
     normalized_pages, flow_cleanup = _repair_pdf_page_flow(normalized_pages)
     cleaned_with_markers, cleanup = _clean_pdf_markdown(separator.join(normalized_pages))
     cleanup.update(page_cleanup)
@@ -690,6 +717,9 @@ def _pdf_document(
         "aiDurationMs": ai_audit.get("durationMs") if ai_audit else None,
         "aiCheckpointDirectory": ai_audit.get("checkpointDirectory") if ai_audit else None,
         "layoutPages": layout_pages,
+        "rosterPages": roster_pages,
+        "rosterGroups": roster_groups,
+        "rosterRows": roster_rows,
         **cleanup,
     }
     if ai_audit:
@@ -713,6 +743,15 @@ def _pdf_document(
             ConversionWarning(
                 "PDF_PROSE_LAYOUT",
                 f"Used semantic prose layout on {layout_pages} text-dense pages.",
+                "info",
+            )
+        )
+    if roster_pages:
+        result.warnings.append(
+            ConversionWarning(
+                "PDF_ALIGNED_ROSTER",
+                f"Reconstructed {roster_groups} aligned groups with {roster_rows} rows "
+                f"on {roster_pages} pages from PDF coordinates.",
                 "info",
             )
         )

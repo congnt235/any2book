@@ -31,6 +31,10 @@ figure img, figure svg { margin-left: auto; margin-right: auto; }
 figcaption { margin-top: .5em; text-align: center; font-size: .9em; }
 table { border-collapse: collapse; max-width: 100%; }
 th, td { border: 1px solid #888; padding: .3em; }
+table.pdf-roster { width: auto; margin: 1.5em auto; border: none; }
+table.pdf-roster caption { text-align: center; margin-bottom: .8em; }
+table.pdf-roster td { border: none; padding: .12em .65em; vertical-align: top; }
+table.pdf-roster tr { break-inside: avoid; page-break-inside: avoid; }
 pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
 a { text-decoration: none; }
 .ornament { letter-spacing: .75em; margin: 1.5em 0; text-align: center; }
