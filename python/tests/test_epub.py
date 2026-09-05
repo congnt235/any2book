@@ -2261,6 +2261,40 @@ def test_internal_validate_rejects_a_missing_navigation_fragment(tmp_path: Path)
         internal_validate(epub)
 
 
+def test_internal_validate_rejects_duplicate_content_identifiers(tmp_path: Path) -> None:
+    epub = tmp_path / "duplicate-identifiers.epub"
+    package = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata/>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="chapter"/></spine>
+</package>
+"""
+    navigation = """<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Navigation</title></head><body><nav epub:type="toc"><ol><li>
+    <a href="chapter.xhtml">Book</a>
+  </li></ol></nav></body>
+</html>
+"""
+    chapter = """<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Book</title></head>
+  <body><h1 id="duplicate">Book</h1><p id="duplicate">Text</p></body>
+</html>
+"""
+    _write_epub(
+        epub,
+        package,
+        {"OEBPS/nav.xhtml": navigation, "OEBPS/chapter.xhtml": chapter},
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate content identifier"):
+        internal_validate(epub)
+
+
 @pytest.mark.parametrize(
     "fragment",
     ["svgView(viewBox(0,0,100,100))", "xywh=0,0,100,100"],

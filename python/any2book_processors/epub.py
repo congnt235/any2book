@@ -2547,14 +2547,20 @@ def _validate_package(
                 raise RuntimeError(
                     f"Invalid EPUB: malformed {expected_root[0]} content: {resource_path}"
                 )
-            content_fragments[resource_path] = {
-                identifier
-                for element in content_root.iter()
-                if (
-                    identifier := element.get("id")
-                    or element.get("{http://www.w3.org/XML/1998/namespace}id")
+            identifiers: set[str] = set()
+            for element in content_root.iter():
+                identifier = element.get("id") or element.get(
+                    "{http://www.w3.org/XML/1998/namespace}id"
                 )
-            }
+                if not identifier:
+                    continue
+                if identifier in identifiers:
+                    raise RuntimeError(
+                        f"Invalid EPUB: duplicate content identifier in {resource_path}: "
+                        f"{identifier}"
+                    )
+                identifiers.add(identifier)
+            content_fragments[resource_path] = identifiers
             content_media_types[resource_path] = media_type
     for href, base_url in navigation_targets:
         target, fragment = _navigation_target(base_url, href)
