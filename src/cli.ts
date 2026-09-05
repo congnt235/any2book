@@ -32,7 +32,7 @@ import { servePreview } from './preview.js';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaults = resolve(root, 'configs/default.yaml');
 const program = new Command();
-program.name('any2book').description('Convert personal knowledge sources to faithful EPUB3 books').version('0.1.0');
+program.name('any2book').description('Convert personal knowledge sources to faithful EPUB3 books').version('0.1.1');
 
 const collectValue = (value: string, values: string[]): string[] => [...values, value];
 const printInstallResults = (results: Array<{ agent: string; path: string; status: string }>): void => {
