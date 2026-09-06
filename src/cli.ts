@@ -4,7 +4,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { ZodError } from 'zod';
-import { prepareAiProvider } from './ai.js';
 import { convertInput, inspectInput } from './backend.js';
 import { finalizeConfig, loadConfig } from './config.js';
 import {
@@ -160,10 +159,10 @@ program.command('convert')
     if (requestedAi !== 'off' && inspectInput(input).format !== 'pdf') {
       throw new Error('AI correction currently supports PDF inputs only.');
     }
-    const ai = await prepareAiProvider(requestedAi, {
-      nonInteractive: options.nonInteractive,
-      approved: options.yesAi,
-    });
+    if (requestedAi !== 'off') {
+      console.warn('AI text correction is disabled: PDF conversion preserves source content.');
+    }
+    const ai = 'off' as const;
     const config = finalizeConfig(baseConfig, input, { ...options, ai });
     const result = convertInput(input, config, options.keepWorkdir);
     console.log(`EPUB: ${result.output}`);

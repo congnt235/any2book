@@ -71,39 +71,25 @@ Supported inputs are TXT, Markdown, local HTML, DOCX, text-based PDF, EPUB, and 
 
 For safe EPUB validation, Any2Book requires Expat 2.6.0 or newer and parses at most 64 MiB per XML or CSS resource, 2 MiB per JavaScript resource, 20,000 unique references per resource, and 256 MiB across all parsed resources in one EPUB. XML is capped at 200,000 elements and 4,096 levels per resource, and CSS function nesting is capped at 4,096 levels. JavaScript parsing is interrupted after 2,500,000 parser operations per publication, and AST inspection is capped at 500,000 syntax-node and scope-resolution steps. Embedded data URLs are allowed without separate manifest entries, while EPUB-prohibited package links, top-level browsing links, statically identifiable `window.open`/`document.open` calls and aliases, and `iframe[srcdoc]` content that cannot be safely inspected are rejected. Large binary media remain subject only to the overall archive checks because validation does not load them into memory.
 
-Canonical conversions emit an EPUB plus a per-book `<output-stem>.any2book/` directory containing the semantic `reader-html/` workspace, `manifest.json`, an optional preview, and HTML/JSON reports. PDF reports include estimated text coverage, chapter count, image accounting, and removed layout artifacts.
+Canonical conversions emit an EPUB plus a per-book `<output-stem>.any2book/` directory containing the semantic `reader-html/` workspace, `manifest.json`, an optional preview, and HTML/JSON reports. PDF reports include the preservation gate result and source-span provenance.
 
 ### PDF fidelity
 
-For legacy Vietnamese PDFs, Any2Book detects TCVN3/ABC text layers and converts them to NFC Unicode. It also recovers uppercase text encoded through legacy font variants. On text-dense pages, the PDF adapter selects semantic layout extraction only when text coverage is preserved and paragraph fragmentation is reduced; sparse front matter remains on the conservative legacy extractor.
+PDF conversion preserves source wording, numbers, punctuation, repeated headers, page numbers, ornaments, and note text. It performs no spelling correction, inferred deletions, or footnote rewriting. Known `.Vn` legacy fonts are decoded per span; Unicode spans are retained. Aligned name/role lists preserve cell relationships and whitespace.
 
-The PDF cleanup pass removes repeated running headers and Roman page numbers, rejoins paragraphs split across page boundaries, converts matching notes to navigable EPUB footnotes, and preserves decorative ornaments. These repairs are included in the quality report. Output remains reflowable EPUB3, so fixed page coordinates and pixel-perfect PDF reproduction are intentionally not preserved.
+Before committing the EPUB, the converter checks ordered text against the source transcription, allowing only NFC equivalence and reflow whitespace, and verifies embedded image occurrence hashes. Navigation labels do not add words to the body. Ambiguous columns, rotated text, overlapping graphics, annotations, forms, or links requiring review stop conversion. Isolated vector graphics are rasterized. This gate verifies conservation of the extracted text layer; it cannot establish that an incorrect PDF text layer matches the printed glyphs. Inspect the source-span provenance and preview for such documents.
 
-## AI correction
+## AI correction compatibility
 
 The default path is deterministic and uses:
 
 - Pandoc for structured formats and EPUB rendering
-- PyMuPDF4LLM plus deterministic cleanup for text PDFs, semantic chapters, and image extraction
+- PyMuPDF source spans and geometry for PDF reflow, without editorial cleanup
 - Calibre for MOBI when installed
 
-AI is off by default. For PDFs, `--ai claude`, `--ai codex`, or `--ai auto` invokes the user's signed-in Claude Code or Codex CLI—no direct API key is required. Any2Book asks before uploading extracted text; use `--yes-ai` only for explicit non-interactive approval. AI returns conservative JSON patches, and guardrails reject non-unique, low-confidence, image-changing, link-changing, or excessively expansive replacements. Audit output is written under `ai-review/`.
-
-Large PDFs are reviewed in checkpointed page batches (10 pages by default):
-
-```bash
-any2book convert large.pdf --ai claude --ai-batch-pages 10 \
-  --job-dir .any2book/jobs/large-book --output large.epub
-```
-
-Each successful batch is saved atomically. If quota, timeout, or provider errors stop a run, repeat the same conversion with:
-
-```bash
-any2book convert large.pdf --ai claude --ai-batch-pages 10 \
-  --job-dir .any2book/jobs/large-book --resume --output large.epub
-```
-
-Resume validates the extracted source hash, provider, batch size, confidence, and correction limit before reusing completed batches.
+PDF source preservation disables AI text correction, including when old commands pass `--ai`.
+No source text is uploaded and no AI patches or checkpoints are applied by this conversion path.
+Use `any2book convert INPUT.pdf --output OUTPUT.epub --ai off`.
 
 ## Development
 

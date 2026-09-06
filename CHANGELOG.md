@@ -7,6 +7,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
+### Changed
+
+- PDF conversion now defaults to source-preserving reflow. AI substitutions, inferred
+  header/page-number deletion, ornament replacement, and footnote/prose rewriting are disabled.
+- Decode known legacy Vietnamese fonts per span and retain the source transcription in
+  provenance. Unknown geometry requiring review fails instead of guessing reading order.
+- Validate ordered text (allowing only NFC and whitespace reflow) and image occurrence hashes
+  against the packaged EPUB before committing output. Navigation labels are not inserted into
+  body text. This verifies the extracted transcription, not the correctness of a PDF text layer.
+
+### Fixed
+
+- Retain whitespace-only spans when constructing aligned name/role lists.
+- Join PDF physical line wraps into reflowable paragraphs using margins, indentation,
+  and baseline spacing, retaining inline emphasis and the text conservation gate.
+
 ## [0.3.0] - 2026-09-05
 
 ### Added
@@ -67,7 +85,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behavior.
 - Correct the npm executable path for global installations.
 
-[Unreleased]: https://github.com/congnt235/any2book/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/congnt235/any2book/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/congnt235/any2book/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/congnt235/any2book/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/congnt235/any2book/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/congnt235/any2book/compare/v0.2.0...v0.2.1

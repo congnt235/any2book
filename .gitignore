@@ -21,6 +21,7 @@ __pycache__/
 htmlcov/
 
 # Any2Book generated content
+output/
 .any2book/
 .any2book-job/
 local-output*/

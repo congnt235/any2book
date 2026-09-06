@@ -36,7 +36,7 @@ def aligned_roster(
             if not spans:
                 continue
             lines.append(Line(
-                "".join(decode(s) for s in spans).strip(),
+                "".join(decode(s) for s in line.get("spans", [])).strip(),
                 min(s["bbox"][0] for s in spans),
                 max(s["bbox"][2] for s in spans),
                 median(s["origin"][1] for s in spans),

@@ -58,7 +58,13 @@ def render(document: BookDocument, output: Path, work_dir: Path, config: dict[st
     title = html.escape(str(document.metadata["title"]))
     chapters = []
     for chapter in document.chapters:
-        chapters.append(f"<section><h1>{html.escape(chapter.title)}</h1>{chapter.html}</section>")
+        if document.quality.get("preservationMode") == "strict":
+            chapters.append(
+                '<section><h1 class="a2b-navigation-only">'
+                f'{html.escape(chapter.title)}</h1>{chapter.html}</section>'
+            )
+        else:
+            chapters.append(f"<section><h1>{html.escape(chapter.title)}</h1>{chapter.html}</section>")
     source.write_text(
         f'<!doctype html><html lang="{html.escape(str(document.metadata["language"]))}">'
         f'<head><meta charset="utf-8"><title>{title}</title></head>'
@@ -84,6 +90,8 @@ def render(document: BookDocument, output: Path, work_dir: Path, config: dict[st
         str(work_dir),
     ]
     authors = cast(list[object], document.metadata.get("authors", []))
+    if document.quality.get("preservationMode") == "strict":
+        command.extend(["--epub-title-page=false", "--wrap=none"])
     for author in authors:
         command.extend(["--metadata", f"author={author}"])
     if config["conversion"]["tableOfContents"] != "none":
@@ -92,6 +100,13 @@ def render(document: BookDocument, output: Path, work_dir: Path, config: dict[st
     if cover:
         command.extend(["--epub-cover-image", str(cover)])
     _run(command)
+    if document.quality.get("preservationMode") == "strict":
+        from .fidelity import remove_navigation_headings, verify_epub
+
+        remove_navigation_headings(output)
+        verify_epub(output, str(document.source["preservedText"]),
+                    cast(list[str], document.source["preservedAssetHashes"]))
+        document.quality["verification"] = "passed-epub-text-and-assets"
 
 
 def _xml_root(archive: zipfile.ZipFile, name: str, label: str) -> etree.Element:
