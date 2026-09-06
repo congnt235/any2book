@@ -259,6 +259,7 @@ def convert(input_path: Path, config_path: Path, work_dir: Path) -> dict[str, ob
                 input_path, file_format, work_dir, metadata, config.get("ai")
             )
             warnings = document.warnings
+            render(document, candidate_output, work_dir, config)
             canonical = document.to_dict()
             quality = document.quality
             canonical_summary = {
@@ -274,7 +275,6 @@ def convert(input_path: Path, config_path: Path, work_dir: Path) -> dict[str, ob
             candidate_ai_workspace = work_dir / "ai-review"
             if candidate_ai_workspace.exists():
                 ai_workspace = candidate_ai_workspace
-            render(document, candidate_output, work_dir, config)
 
         internal_validate(candidate_output)
         validation = run_epubcheck(candidate_output, warnings)

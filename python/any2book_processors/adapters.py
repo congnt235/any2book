@@ -8,14 +8,11 @@ import unicodedata
 import zipfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pymupdf as fitz
-import pymupdf4llm  # type: ignore[import-untyped]
 
-from .ai_review import Provider, review_pages_in_batches
 from .models import BookDocument, Chapter, ConversionWarning
-from .pdf_layout import aligned_roster
 from .security import sanitize_html
 
 SUPPORTED = {"txt", "markdown", "html", "docx", "pdf", "epub", "mobi"}
@@ -541,243 +538,6 @@ def _word_count(value: str) -> int:
     return len(re.findall(r"\b\w+\b", without_markup, re.UNICODE))
 
 
-def _pdf_document(
-    path: Path,
-    work_dir: Path,
-    metadata: dict[str, Any],
-    ai_config: dict[str, Any],
-) -> BookDocument:
-    document = fitz.open(path)
-    source_text = "".join(
-        document.load_page(index).get_text() for index in range(document.page_count)
-    )
-    if len(source_text.strip()) < 40:
-        raise RuntimeError("Scanned PDF detected. OCR is not included in the MVP.")
-
-    normalized_source_text, source_tcvn3_characters = _normalize_tcvn3(source_text)
-    image_occurrences: list[int] = []
-    page_image_counts: list[int] = []
-    for page_index in range(document.page_count):
-        page_images = [image[0] for image in document.load_page(page_index).get_images(full=True)]
-        page_image_counts.append(len(page_images))
-        image_occurrences.extend(page_images)
-    unique_images = len(set(image_occurrences))
-    assets = work_dir / "assets"
-    assets.mkdir(parents=True, exist_ok=True)
-
-    pymupdf4llm.use_layout(False)
-    legacy_chunks = pymupdf4llm.to_markdown(
-        str(path),
-        page_chunks=True,
-        write_images=True,
-        image_path=str(assets),
-        table_strategy="lines_strict",
-        show_progress=False,
-    )
-    if not isinstance(legacy_chunks, list):
-        raise RuntimeError("PyMuPDF4LLM did not return page chunks")
-    chunks = list(legacy_chunks)
-    selected_engines = ["pymupdf4llm-legacy"] * len(chunks)
-    layout_pages = 0
-    if source_tcvn3_characters:
-        pymupdf4llm.use_layout(True)
-        layout_chunks = pymupdf4llm.to_markdown(
-            str(path),
-            page_chunks=True,
-            write_images=False,
-            table_strategy="lines_strict",
-            show_progress=False,
-        )
-        if not isinstance(layout_chunks, list) or len(layout_chunks) != len(legacy_chunks):
-            raise RuntimeError("PyMuPDF4LLM layout extraction did not preserve page boundaries")
-        for index, (legacy_chunk, layout_chunk) in enumerate(
-            zip(legacy_chunks, layout_chunks, strict=True)
-        ):
-            legacy_text = str(legacy_chunk.get("text", ""))
-            layout_text = str(layout_chunk.get("text", ""))
-            if page_image_counts[index] == 0 and _prefer_pdf_prose_layout(
-                legacy_text, layout_text
-            ):
-                chunks[index] = layout_chunk
-                selected_engines[index] = "pymupdf4llm-layout"
-                layout_pages += 1
-    generated_images = [item for item in assets.rglob("*") if item.is_file()]
-    raw_pages = [
-        str(chunk.get("text", "")).replace(str(assets), "assets") for chunk in chunks
-    ]
-    separator = "\n\n<!-- A2B_PAGE_BREAK -->\n\n"
-    normalized_with_markers, normalized_characters = _normalize_tcvn3(separator.join(raw_pages))
-    normalized_pages = normalized_with_markers.split("<!-- A2B_PAGE_BREAK -->")
-    font_case_corrections = 0
-    for index, page in enumerate(normalized_pages):
-        if selected_engines[index] != "pymupdf4llm-legacy":
-            continue
-        normalized_pages[index], corrections = _restore_pdf_font_case(
-            page, document.load_page(index).get_text("dict")
-        )
-        font_case_corrections += corrections
-    normalized_pages, page_cleanup = _remove_pdf_page_artifacts(normalized_pages)
-    roster_pages = 0
-    roster_groups = 0
-    roster_rows = 0
-    for index in range(len(normalized_pages)):
-        if page_image_counts[index]:
-            continue
-
-        def decode_span(span: dict[str, Any]) -> str:
-            text = str(span["text"])
-            font = str(span.get("font", ""))
-            if font.startswith(".Vn"):
-                text = unicodedata.normalize("NFC", text.translate(_TCVN3_TRANSLATION))
-                if re.search(r"H(?:,|$)", font):
-                    text = text.upper()
-            return text
-
-        roster = aligned_roster(document.load_page(index).get_text("dict"), decode_span)
-        if roster is not None:
-            normalized_pages[index], groups, rows = roster
-            selected_engines[index] = "pdf-aligned-roster"
-            roster_pages += 1
-            roster_groups += groups
-            roster_rows += rows
-    normalized_pages, flow_cleanup = _repair_pdf_page_flow(normalized_pages)
-    cleaned_with_markers, cleanup = _clean_pdf_markdown(separator.join(normalized_pages))
-    cleanup.update(page_cleanup)
-    cleanup.update(flow_cleanup)
-    cleanup["normalizedTcvn3Characters"] = normalized_characters
-    cleanup["fontCaseCorrections"] = font_case_corrections
-    cleaned_pages = [
-        part.strip() + "\n" for part in cleaned_with_markers.split("<!-- A2B_PAGE_BREAK -->")
-    ]
-    if len(cleaned_pages) != len(raw_pages):
-        raise RuntimeError("Could not preserve PDF page boundaries for AI batching")
-    cleaned_markdown = "\n\n".join(cleaned_pages)
-    ai_audit: dict[str, object] | None = None
-    provider = str(ai_config.get("provider", "off"))
-    if provider in {"claude", "codex"}:
-        job_value = ai_config.get("jobDirectory")
-        if not isinstance(job_value, str) or not job_value:
-            raise RuntimeError("AI batching requires a persistent jobDirectory")
-        cleaned_markdown, ai_audit = review_pages_in_batches(
-            cleaned_pages,
-            cast(Provider, provider),
-            work_dir,
-            Path(job_value),
-            float(ai_config.get("minimumConfidence", 0.9)),
-            int(ai_config.get("maxCorrections", 80)),
-            int(ai_config.get("timeoutSeconds", 600)),
-            int(ai_config.get("batchPages", 10)),
-            bool(ai_config.get("resume", False)),
-        )
-    markdown_path = work_dir / "pdf-reader.md"
-    markdown_path.write_text(cleaned_markdown, encoding="utf-8")
-
-    result = _pandoc_document(markdown_path, "markdown", work_dir, metadata)
-    extracted_images = len(generated_images)
-    source_words = _word_count(normalized_source_text)
-    extracted_words = _word_count(cleaned_markdown)
-    raw_coverage = min(1.0, extracted_words / source_words) if source_words else 0.0
-    meaningful_source_words = max(
-        1,
-        source_words - cleanup["removedLineNumbers"] - cleanup["removedPageMarkers"] * 3,
-    )
-    coverage = min(1.0, extracted_words / meaningful_source_words)
-    result.source = {"path": str(path), "format": "pdf", "pages": document.page_count}
-    result.provenance = [
-        {
-            "sourcePage": int(chunk.get("metadata", {}).get("page_number", index + 1)),
-            "textCharacters": len(str(chunk.get("text", ""))),
-            "engine": selected_engines[index],
-        }
-        for index, chunk in enumerate(chunks)
-    ]
-    ai_applied = ai_audit.get("applied", []) if ai_audit else []
-    ai_rejected = ai_audit.get("rejected", []) if ai_audit else []
-    if not isinstance(ai_applied, list) or not isinstance(ai_rejected, list):
-        raise RuntimeError("Invalid AI correction audit")
-    result.quality = {
-        "textCoverage": round(coverage, 4),
-        "rawTextCoverage": round(raw_coverage, 4),
-        "sourceWords": source_words,
-        "meaningfulSourceWords": meaningful_source_words,
-        "extractedWords": extracted_words,
-        "sourcePages": document.page_count,
-        "chapters": len(result.chapters),
-        "sourceImageOccurrences": len(image_occurrences),
-        "sourceUniqueImages": unique_images,
-        "embeddedImages": extracted_images,
-        "duplicateImageOccurrences": max(0, len(image_occurrences) - unique_images),
-        "unaccountedUniqueImages": max(0, unique_images - extracted_images),
-        "aiProvider": provider,
-        "aiCorrectionsApplied": len(ai_applied),
-        "aiCorrectionsRejected": len(ai_rejected),
-        "aiBatchPages": int(ai_config.get("batchPages", 10)) if ai_audit else 0,
-        "aiTotalBatches": ai_audit.get("totalBatches", 0) if ai_audit else 0,
-        "aiEstimatedCostUsd": ai_audit.get("estimatedCostUsd") if ai_audit else None,
-        "aiDurationMs": ai_audit.get("durationMs") if ai_audit else None,
-        "aiCheckpointDirectory": ai_audit.get("checkpointDirectory") if ai_audit else None,
-        "layoutPages": layout_pages,
-        "rosterPages": roster_pages,
-        "rosterGroups": roster_groups,
-        "rosterRows": roster_rows,
-        **cleanup,
-    }
-    if ai_audit:
-        result.warnings.append(
-            ConversionWarning(
-                "AI_CORRECTIONS_APPLIED",
-                f"Applied {len(ai_applied)} conservative corrections from {provider} CLI.",
-                "info",
-            )
-        )
-    if normalized_characters:
-        result.warnings.append(
-            ConversionWarning(
-                "PDF_TCVN3_NORMALIZED",
-                f"Normalized {normalized_characters} legacy TCVN3 characters to Unicode.",
-                "info",
-            )
-        )
-    if layout_pages:
-        result.warnings.append(
-            ConversionWarning(
-                "PDF_PROSE_LAYOUT",
-                f"Used semantic prose layout on {layout_pages} text-dense pages.",
-                "info",
-            )
-        )
-    if roster_pages:
-        result.warnings.append(
-            ConversionWarning(
-                "PDF_ALIGNED_ROSTER",
-                f"Reconstructed {roster_groups} aligned groups with {roster_rows} rows "
-                f"on {roster_pages} pages from PDF coordinates.",
-                "info",
-            )
-        )
-    result.warnings.append(
-        ConversionWarning(
-            "PDF_STRUCTURED_EXTRACTION",
-            "PDF structure was reconstructed with PyMuPDF4LLM; "
-            "review low-confidence layout in the preview.",
-            "info",
-        )
-    )
-    if extracted_images < unique_images:
-        result.warnings.append(
-            ConversionWarning(
-                "PDF_IMAGE_COVERAGE",
-                f"Extracted {extracted_images} of {unique_images} unique PDF image objects.",
-            )
-        )
-    if coverage < 0.95:
-        result.warnings.append(
-            ConversionWarning(
-                "PDF_TEXT_COVERAGE_LOW",
-                f"Estimated text coverage is {coverage:.1%}; inspect the conversion report.",
-            )
-        )
-    return result
 
 
 def extract_document(
@@ -792,7 +552,24 @@ def extract_document(
     if file_format in {"markdown", "html", "docx"}:
         return _pandoc_document(path, file_format, work_dir, metadata)
     if file_format == "pdf":
-        return _pdf_document(path, work_dir, metadata, ai_config or {"provider": "off"})
+        from .pdf_preserve import extract_preserved_pdf
+
+        def decode(span: dict[str, Any]) -> str:
+            value = str(span["text"])
+            font = str(span.get("font", ""))
+            if font.startswith(".Vn"):
+                value = unicodedata.normalize("NFC", value.translate(_TCVN3_TRANSLATION))
+                if re.search(r"H(?:,|$)", font):
+                    value = value.upper()
+            return value
+
+        result = extract_preserved_pdf(path, work_dir, metadata, decode)
+        if ai_config and ai_config.get("provider", "off") != "off":
+            result.warnings.append(ConversionWarning(
+                "AI_DISABLED_FOR_PRESERVATION",
+                "AI text correction is disabled in source-preserving PDF conversion.", "info"
+            ))
+        return result
     raise ValueError(f"No canonical adapter for {file_format}")
 
 
